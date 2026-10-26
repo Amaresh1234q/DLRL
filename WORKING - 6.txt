@@ -1,0 +1,92 @@
+import numpy as np
+import pandas as pd
+import requests
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# Bypassing yfinance scraper blocks using Yahoo's robust v8 Chart API
+ticker = 'AAPL'
+start_epoch = 1672531200 # 2023-01-01
+end_epoch = 1704067200   # 2024-01-01
+url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?period1={start_epoch}&period2={end_epoch}&interval=1d"
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+}
+
+response = requests.get(url, headers=headers)
+if response.ok:
+    json_data = response.json()
+    chart_result = json_data['chart']['result'][0]
+    timestamps = chart_result['timestamp']
+    closes = chart_result['indicators']['quote'][0]['close']
+    
+    # Create DataFrame
+    data = pd.DataFrame({
+        'Date': pd.to_datetime(timestamps, unit='s'),
+        'Close': closes
+    })
+    data.dropna(inplace=True)
+    data.set_index('Date', inplace=True)
+else:
+    raise RuntimeError(f"Failed to download stock data: {response.status_code} - {response.text}")
+
+prices = data['Close'].values.reshape(-1, 1)
+print(data.head())
+
+def create_data(s, steps=20):
+    X = np.array([
+        s[i:i+steps, 0]
+        for i in range(len(s) - steps)
+    ])
+    y = np.array([
+        s[i+steps, 0]
+        for i in range(len(s) - steps)
+    ])
+    return X, y
+
+scaler = MinMaxScaler()
+scaled = scaler.fit_transform(prices)
+
+steps = 20
+X, y = create_data(scaled, steps)
+X = X.reshape((-1, steps, 1))
+
+print("X shape:", X.shape)
+print("y shape:", y.shape)
+
+model = Sequential([
+    LSTM(32, input_shape=(steps, 1)),
+    Dense(1)
+])
+
+model.summary()
+
+model.compile(
+    optimizer='adam',
+    loss='mse'
+)
+
+model.fit(
+    X,
+    y,
+    epochs=15,
+    batch_size=8,
+    verbose=0
+)
+
+pred_scaled = model.predict(X)
+pred = scaler.inverse_transform(pred_scaled)
+
+plt.plot(
+    prices[steps:],
+    label='True'
+)
+plt.plot(
+    pred,
+    label='Predicted'
+)
+plt.legend()
+plt.show()
